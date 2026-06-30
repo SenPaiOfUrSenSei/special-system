@@ -287,3 +287,139 @@ async def settle_pool(
         "settled_amount": old_exposure
     }
 
+@router.post("/chat")
+async def chat_with_bot(
+    chat_req: schemas.ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    import os
+    import requests
+    
+    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+    
+    # Dynamic model check
+    try:
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=3)
+        model = "llama3:latest"
+        if resp.status_code == 200:
+            models_data = resp.json().get("models", [])
+            names = [m["name"] for m in models_data]
+            for pref in ["llama3:latest", "gemma4:e4b", "gemma4:26b"]:
+                if pref in names:
+                    model = pref
+                    break
+            else:
+                if names:
+                    model = names[0]
+    except Exception as e:
+        print(f"Error fetching Ollama models: {e}")
+        model = "llama3:latest"
+        
+    system_prompt = (
+        f"You are Bridgr Assistant, a helpful, polite, and professional AI chatbot for the Bridgr Layer 2 cross-chain platform. "
+        f"You are speaking with {current_user.first_name} {current_user.last_name} (username: @{current_user.username}). "
+        f"You can help them check their balances, understand cross-chain swaps, explain system pools, and navigate the platform. "
+        f"To inspect the user's current currency balances, you must call the tool `get_user_balances`. "
+        f"To inspect the user's recent transactions, you must call the tool `get_transaction_history`. "
+        f"If the user asks about their balances, how much money they have, or their funds, you MUST output exactly: CALL_TOOL: get_user_balances "
+        f"If the user asks about their recent transactions, history, or past transfers, you MUST output exactly: CALL_TOOL: get_transaction_history "
+        f"Do not write anything else when outputting a CALL_TOOL command. "
+        f"Once you receive the tool response (which will be supplied in the next turn), use the data to answer the user's question clearly. "
+        f"Be friendly and clear."
+    )
+    
+    ollama_messages = [{"role": "system", "content": system_prompt}]
+    for msg in chat_req.messages:
+        ollama_messages.append({"role": msg.role, "content": msg.content})
+        
+    try:
+        response = requests.post(
+            f"{ollama_url}/api/chat",
+            json={
+                "model": model,
+                "messages": ollama_messages,
+                "stream": False
+            },
+            timeout=20
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail="Ollama service returned an error.")
+            
+        result = response.json()
+        assistant_content = result.get("message", {}).get("content", "")
+        
+        # Intercept tool calls
+        if "CALL_TOOL: get_user_balances" in assistant_content:
+            # 1. Fetch balances
+            balances = db.query(models.Balance).filter(models.Balance.user_id == current_user.id).all()
+            balance_str = ", ".join([f"{b.currency}: {b.amount:.4f}" for b in balances])
+            tool_resp = f"Tool result for `get_user_balances`: Current User Balances: {balance_str if balance_str else 'No balances found.'}"
+            
+            ollama_messages.append({"role": "assistant", "content": "CALL_TOOL: get_user_balances"})
+            ollama_messages.append({"role": "user", "content": tool_resp})
+            
+            # Re-call Ollama
+            response = requests.post(
+                f"{ollama_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": ollama_messages,
+                    "stream": False
+                },
+                timeout=20
+            )
+            if response.status_code == 200:
+                assistant_content = response.json().get("message", {}).get("content", "")
+                
+        elif "CALL_TOOL: get_transaction_history" in assistant_content:
+            # 2. Fetch transactions
+            txs = db.query(models.Transaction).filter(
+                (models.Transaction.sender_id == current_user.id) | 
+                (models.Transaction.recipient_id == current_user.id)
+            ).order_by(models.Transaction.timestamp.desc()).limit(5).all()
+            
+            tx_list = []
+            for tx in txs:
+                sender_user = db.query(models.User).filter(models.User.id == tx.sender_id).first()
+                recipient_user = db.query(models.User).filter(models.User.id == tx.recipient_id).first()
+                sender_name = sender_user.username if sender_user else "System Deposit"
+                recipient_name = recipient_user.username if recipient_user else "Unknown"
+                
+                is_outgoing = tx.sender_id == current_user.id
+                if is_outgoing:
+                    tx_list.append(f"Sent {tx.source_amount} {tx.source_currency} to @{recipient_name} (received as {tx.target_amount} {tx.target_currency})")
+                else:
+                    tx_list.append(f"Received {tx.target_amount} {tx.target_currency} from @{sender_name} (sent as {tx.source_amount} {tx.source_currency})")
+                    
+            tx_str = "; ".join(tx_list)
+            tool_resp = f"Tool result for `get_transaction_history`: Recent Transactions: {tx_str if tx_str else 'No transactions found.'}"
+            
+            ollama_messages.append({"role": "assistant", "content": "CALL_TOOL: get_transaction_history"})
+            ollama_messages.append({"role": "user", "content": tool_resp})
+            
+            # Re-call Ollama
+            response = requests.post(
+                f"{ollama_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": ollama_messages,
+                    "stream": False
+                },
+                timeout=20
+            )
+            if response.status_code == 200:
+                assistant_content = response.json().get("message", {}).get("content", "")
+                
+        return {"content": assistant_content}
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Ollama request error: {e}")
+        raise HTTPException(
+            status_code=503, 
+            detail="Ollama instance is not reachable. Make sure Ollama is running and accessible."
+        )
+
+
+

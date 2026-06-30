@@ -6,6 +6,7 @@ import ThreeBackground from './components/ThreeBackground'
 import LandingPage from './pages/LandingPage'
 import BridgePage from './pages/BridgePage'
 import LoginPage from './pages/LoginPage'
+import ChatPage from './pages/ChatPage'
 
 export default function App() {
   const [token, setToken] = useState(() => {
@@ -98,6 +99,16 @@ export default function App() {
                 userEmail={userEmail} 
                 username={username}
                 preferredCurrency={preferredCurrency} 
+              />
+            } 
+          />
+          <Route 
+            path="/chat" 
+            element={
+              <ChatPage 
+                token={token} 
+                firstName={firstName} 
+                username={username}
               />
             } 
           />

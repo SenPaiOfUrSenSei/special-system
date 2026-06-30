@@ -83,6 +83,14 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api")
 app.include_router(bridge.router, prefix="/api")
 
+import asyncio
+from app import settlement_worker
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the settlement decision scheduler in the background
+    asyncio.create_task(settlement_worker.start_scheduler())
+
 @app.get("/")
 async def root():
     return {

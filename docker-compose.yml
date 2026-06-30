@@ -22,10 +22,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
+    network_mode: "host"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/payment_portal
-    ports:
-      - "8001:8001"
+      - DATABASE_URL=postgresql://postgres:postgres@localhost:5433/payment_portal
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+    volumes:
+      - ./crypto_market_data.csv:/app/crypto_market_data.csv
+      - ./AI ENGINE:/app/AI ENGINE
     depends_on:
       db:
         condition: service_healthy

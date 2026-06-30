@@ -23,6 +23,11 @@ export default function Navbar({ userEmail, firstName, username, onLogout }) {
               Send Money
             </NavLink>
           </li>
+          <li>
+            <NavLink to="/chat" className={({ isActive }) => isActive ? "nav-link active" : "nav-link"}>
+              AI Chatbot
+            </NavLink>
+          </li>
         </ul>
 
         <div>
